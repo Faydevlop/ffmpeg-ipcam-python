@@ -14,16 +14,15 @@ from pathlib import Path
 import webbrowser
 import socket
 from http.server import HTTPServer, BaseHTTPRequestHandler
-import socketserver
 import select
 
 active_live_servers = []
 
 # ------------------- S3 Configuration -------------------
-AWS_ACCESS_KEY_ID = 'your-access-key-id'
-AWS_SECRET_ACCESS_KEY = 'your-secret-access-key'
-AWS_REGION = 'us-east-1'
-S3_BUCKET_NAME = 'your-bucket-name'
+AWS_ACCESS_KEY_ID = ''
+AWS_SECRET_ACCESS_KEY = ''
+AWS_REGION = 'eu-north-1'
+S3_BUCKET_NAME = 'my-bucket'
 S3_FOLDER_PREFIX = 'recorded-videos/'
 
 # ------------------- Logging Configuration -------------------
@@ -31,8 +30,8 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('video_recorder.log'),
-        logging.StreamHandler()
+        logging.FileHandler('video_recorder.log')
+        # Removed StreamHandler to prevent terminal output
     ]
 )
 logger = logging.getLogger(__name__)
@@ -274,6 +273,36 @@ class S3UploadScheduler:
             logger.info(f"Queued for upload: {file_path}")
         else:
             logger.error(f"File not found for upload: {file_path}")
+    
+    def check_file_exists_in_s3(self, file_name):
+        """Check if a file exists in the S3 bucket"""
+        if self.s3_client is None:
+            return False
+        try:
+            s3_key = f"{S3_FOLDER_PREFIX}{file_name}"
+            self.s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+            return True
+        except ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                return False
+            logger.error(f"Error checking file existence in S3 for {file_name}: {e}")
+            return False
+    
+    def _upload_worker(self):
+        """Worker thread that processes the upload queue"""
+        while self.running:
+            try:
+                # Wait for a file to upload with timeout
+                file_path = self.upload_queue.get(timeout=1)
+                if file_path:
+                    self._upload_file(file_path)
+                    self.upload_queue.task_done()
+            except queue.Empty:
+                # Timeout occurred, continue checking if we should stop
+                continue
+            except Exception as e:
+                logger.error(f"Error in upload worker: {e}")
+                continue
     
     def _upload_file(self, file_path):
         try:
@@ -615,7 +644,7 @@ def close_browser_tabs(url):
             subprocess.run(['taskkill', '/f', '/im', 'chrome.exe'], capture_output=True)
             subprocess.run(['taskkill', '/f', '/im', 'firefox.exe'], capture_output=True)
             subprocess.run(['taskkill', '/f', '/im', 'msedge.exe'], capture_output=True)
-        print("Browser tabs closed")
+            print("Browser tabs closed")
     except:
         print("Could not close browser tabs automatically - please close manually")
 
@@ -756,6 +785,16 @@ def main():
             sys.exit()
         video_folder = os.path.join(usb_drive, 'captured_videos')
         os.makedirs(video_folder, exist_ok=True)
+
+        # Check for existing files in video_folder and queue them for upload if not in S3
+        print("Checking for existing video files not uploaded to S3...")
+        for file_name in os.listdir(video_folder):
+            if file_name.endswith('.mp4'):
+                file_path = os.path.join(video_folder, file_name)
+                if os.path.isfile(file_path) and not upload_scheduler.check_file_exists_in_s3(file_name):
+                    logger.info(f"Found local file not in S3: {file_name}. Queuing for upload.")
+                    upload_scheduler.queue_upload(file_path)
+
         print("Note: S3 uploads may fail due to invalid credentials. Update AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and S3_BUCKET_NAME in the script.")
         selected_camera = select_camera()
         if selected_camera[0] is None:
@@ -798,7 +837,7 @@ def main():
                         for line in process.stderr:
                             if line.strip():
                                 stderr_output.append(line.strip())
-                                
+                                logger.error(line.strip())
                         return stderr_output
                     error_thread = threading.Thread(target=log_ffmpeg_errors, daemon=True)
                     error_thread.start()
