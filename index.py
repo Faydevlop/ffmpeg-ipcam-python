@@ -22,8 +22,15 @@ active_live_servers = []
 AWS_ACCESS_KEY_ID = ''
 AWS_SECRET_ACCESS_KEY = ''
 AWS_REGION = 'eu-north-1'
-S3_BUCKET_NAME = 'my-bucket'
+S3_BUCKET_NAME = 'my-bucket-save'
 S3_FOLDER_PREFIX = 'recorded-videos/'
+
+# ------------------- Integrated Devices -------------------
+INTEGRATED_DEVICES = [
+    {"name": "Camera 1", "ip": "http://192.168.1.103:8080/video"},
+    {"name": "Camera 2", "ip": "http://193.163.12.1:8080/video"},
+    {"name": "Fayis Phone", "ip": "http://192.168.1.103:8080/video"}
+]
 
 # ------------------- Logging Configuration -------------------
 logging.basicConfig(
@@ -572,8 +579,9 @@ def select_camera():
     print("\n=== Camera Selection ===")
     print("1. Default camera (built-in/USB camera)")
     print("2. External IP webcam")
+    print("3. Integrated devices")
     while True:
-        choice = input("Select camera (1 or 2): ").strip()
+        choice = input("Select camera (1, 2, or 3): ").strip()
         if choice == '1':
             cameras = get_camera_list()
             if cameras:
@@ -633,8 +641,54 @@ def select_camera():
                     return ('live', ip_url, audio_url), 0
                 else:
                     print("Invalid choice. Please enter 1 or 2.")
+        elif choice == '3':
+            if not INTEGRATED_DEVICES:
+                print("No integrated devices configured.")
+                continue
+            print("\nAvailable integrated devices:")
+            for i, device in enumerate(INTEGRATED_DEVICES, 1):
+                print(f"  {i}. {device['name']} ({device['ip']})")
+            while True:
+                try:
+                    dev_choice = input(f"Select device (1-{len(INTEGRATED_DEVICES)}) or press Enter to return: ").strip()
+                    if not dev_choice:
+                        break
+                    dev_index = int(dev_choice) - 1
+                    if 0 <= dev_index < len(INTEGRATED_DEVICES):
+                        selected_device = INTEGRATED_DEVICES[dev_index]
+                        ip_url = selected_device['ip']
+                        print(f"\nSelected device: {selected_device['name']}")
+                        print(f"IP Camera URL: {ip_url}")
+                        if not test_video_stream(ip_url):
+                            print(f"Error: Video stream at {ip_url} is not accessible. Please check the device and network.")
+                            continue
+                        audio_url = ip_url.replace('/video', '/audio.opus')
+                        if not test_audio_stream(audio_url):
+                            print(f"Warning: Audio stream at {audio_url} is not accessible.")
+                            audio_url_aac = ip_url.replace('/video', '/audio.aac')
+                            print(f"Trying fallback audio stream: {audio_url_aac}")
+                            if test_audio_stream(audio_url_aac):
+                                print(f"Fallback audio stream {audio_url_aac} is accessible.")
+                                audio_url = audio_url_aac
+                            else:
+                                print("Warning: Fallback audio stream also inaccessible. Recording may not include audio.")
+                        print("Options:")
+                        print("1. Record video")
+                        print("2. Live stream view")
+                        while True:
+                            ip_choice = input("Select option (1 or 2): ").strip()
+                            if ip_choice == '1':
+                                return (ip_url, audio_url), 0
+                            elif ip_choice == '2':
+                                return ('live', ip_url, audio_url), 0
+                            else:
+                                print("Invalid choice. Please enter 1 or 2.")
+                    else:
+                        print(f"Invalid choice. Please enter 1-{len(INTEGRATED_DEVICES)}")
+                except ValueError:
+                    print("Invalid input. Please enter a number.")
         else:
-            print("Invalid choice. Please enter 1 or 2.")
+            print("Invalid choice. Please enter 1, 2, or 3.")
 
 # ------------------- Close Browser Tabs -------------------
 def close_browser_tabs(url):
